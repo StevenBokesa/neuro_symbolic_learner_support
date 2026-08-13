@@ -1,0 +1,367 @@
+@prefix ls: <http://example.org/learner-support/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+
+# =========================================================
+# Ontology
+# =========================================================
+
+ls:LearnerSupportOntology
+    rdf:type owl:Ontology ;
+    rdfs:label "Learner Support Ontology" .
+
+
+# =========================================================
+# Core classes
+# =========================================================
+
+ls:Learner
+    rdf:type owl:Class ;
+    rdfs:label "Learner" .
+
+ls:ModulePresentation
+    rdf:type owl:Class ;
+    rdfs:label "Module Presentation" .
+
+ls:Observation
+    rdf:type owl:Class ;
+    rdfs:label "Learner Observation" .
+
+ls:EvidenceState
+    rdf:type owl:Class ;
+    rdfs:label "Evidence State" .
+
+ls:PerformanceState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Performance State" .
+
+ls:AssessmentTrendState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Assessment Trend State" .
+
+ls:EngagementState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Engagement State" .
+
+ls:InactivityState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Inactivity State" .
+
+ls:CompletionState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Completion State" .
+
+ls:SubmissionState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Submission State" .
+
+ls:EvidenceSufficiencyState
+    rdf:type owl:Class ;
+    rdfs:subClassOf ls:EvidenceState ;
+    rdfs:label "Evidence Sufficiency State" .
+
+ls:RiskState
+    rdf:type owl:Class ;
+    rdfs:label "Risk State" .
+
+ls:Intervention
+    rdf:type owl:Class ;
+    rdfs:label "Intervention" .
+
+
+# =========================================================
+# Object properties
+# =========================================================
+
+ls:enrolledIn
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Learner ;
+    rdfs:range ls:ModulePresentation .
+
+ls:hasObservation
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Learner ;
+    rdfs:range ls:Observation .
+
+ls:hasPerformanceState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:PerformanceState .
+
+ls:hasAssessmentTrendState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:AssessmentTrendState .
+
+ls:hasEngagementState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:EngagementState .
+
+ls:hasInactivityState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:InactivityState .
+
+ls:hasCompletionState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:CompletionState .
+
+ls:hasSubmissionState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:SubmissionState .
+
+ls:hasEvidenceSufficiency
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:EvidenceSufficiencyState .
+
+ls:hasRiskState
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range ls:RiskState .
+
+ls:supportsIntervention
+    rdf:type owl:ObjectProperty ;
+    rdfs:domain ls:RiskState ;
+    rdfs:range ls:Intervention .
+
+
+# =========================================================
+# Data properties
+# =========================================================
+
+ls:observedAtDay
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:integer .
+
+ls:weightedAssessmentAverage
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:decimal .
+
+ls:assessmentTrend
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:decimal .
+
+ls:recentClicks
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:integer .
+
+ls:previousClicks
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:integer .
+
+ls:engagementChange
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:decimal .
+
+ls:daysSinceLastActivity
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:integer .
+
+ls:assessmentCompletionRate
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:decimal .
+
+ls:lateSubmissions
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:integer .
+
+ls:predictedRiskProbability
+    rdf:type owl:DatatypeProperty ;
+    rdfs:domain ls:Observation ;
+    rdfs:range xsd:decimal .
+
+
+# =========================================================
+# Performance-state individuals
+# =========================================================
+
+ls:StrongPerformance
+    rdf:type ls:PerformanceState .
+
+ls:SatisfactoryPerformance
+    rdf:type ls:PerformanceState .
+
+ls:BorderlinePerformance
+    rdf:type ls:PerformanceState .
+
+ls:LowPerformance
+    rdf:type ls:PerformanceState .
+
+ls:InsufficientAssessmentEvidence
+    rdf:type ls:PerformanceState .
+
+
+# =========================================================
+# Assessment trend individuals
+# =========================================================
+
+ls:SharplyDecliningAssessment
+    rdf:type ls:AssessmentTrendState .
+
+ls:DecliningAssessment
+    rdf:type ls:AssessmentTrendState .
+
+ls:StableAssessment
+    rdf:type ls:AssessmentTrendState .
+
+ls:ImprovingAssessment
+    rdf:type ls:AssessmentTrendState .
+
+ls:StronglyImprovingAssessment
+    rdf:type ls:AssessmentTrendState .
+
+ls:InsufficientTrendEvidence
+    rdf:type ls:AssessmentTrendState .
+
+
+# =========================================================
+# Engagement individuals
+# =========================================================
+
+ls:SharplyDecliningEngagement
+    rdf:type ls:EngagementState .
+
+ls:DecliningEngagement
+    rdf:type ls:EngagementState .
+
+ls:StableEngagement
+    rdf:type ls:EngagementState .
+
+ls:IncreasingEngagement
+    rdf:type ls:EngagementState .
+
+ls:StronglyIncreasingEngagement
+    rdf:type ls:EngagementState .
+
+ls:NoObservedEngagement
+    rdf:type ls:EngagementState .
+
+ls:InsufficientEngagementEvidence
+    rdf:type ls:EngagementState .
+
+
+# =========================================================
+# Inactivity individuals
+# =========================================================
+
+ls:Active
+    rdf:type ls:InactivityState .
+
+ls:RecentlyInactive
+    rdf:type ls:InactivityState .
+
+ls:Inactive
+    rdf:type ls:InactivityState .
+
+ls:HighlyInactive
+    rdf:type ls:InactivityState .
+
+ls:UnknownInactivity
+    rdf:type ls:InactivityState .
+
+
+# =========================================================
+# Completion individuals
+# =========================================================
+
+ls:Complete
+    rdf:type ls:CompletionState .
+
+ls:PartialCompletion
+    rdf:type ls:CompletionState .
+
+ls:LowCompletion
+    rdf:type ls:CompletionState .
+
+ls:NoAssessmentSubmission
+    rdf:type ls:CompletionState .
+
+ls:UnknownCompletion
+    rdf:type ls:CompletionState .
+
+
+# =========================================================
+# Submission-state individuals
+# =========================================================
+
+ls:NoLateSubmissions
+    rdf:type ls:SubmissionState .
+
+ls:LateSubmission
+    rdf:type ls:SubmissionState .
+
+ls:MultipleLateSubmissions
+    rdf:type ls:SubmissionState .
+
+ls:UnknownSubmissionTimeliness
+    rdf:type ls:SubmissionState .
+
+
+# =========================================================
+# Evidence sufficiency individuals
+# =========================================================
+
+ls:SufficientEvidence
+    rdf:type ls:EvidenceSufficiencyState .
+
+ls:PartialEvidence
+    rdf:type ls:EvidenceSufficiencyState .
+
+ls:InsufficientEvidence
+    rdf:type ls:EvidenceSufficiencyState .
+
+
+# =========================================================
+# Risk-state individuals
+# =========================================================
+
+ls:LowRisk
+    rdf:type ls:RiskState .
+
+ls:ModerateRisk
+    rdf:type ls:RiskState .
+
+ls:HighRisk
+    rdf:type ls:RiskState .
+
+ls:UncertainRisk
+    rdf:type ls:RiskState .
+
+
+# =========================================================
+# Intervention individuals
+# =========================================================
+
+ls:ContinueMonitoring
+    rdf:type ls:Intervention .
+
+ls:AutomatedReminder
+    rdf:type ls:Intervention .
+
+ls:TutorReview
+    rdf:type ls:Intervention .
+
+ls:ContactLearner
+    rdf:type ls:Intervention .
