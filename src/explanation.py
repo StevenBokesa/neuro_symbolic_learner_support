@@ -1,9 +1,12 @@
 from pathlib import Path
+import os
 
 import joblib
 import numpy as np
 import pandas as pd
 import shap
+
+from openai import OpenAI
 
 from src.model import prepare_features
 
@@ -34,12 +37,33 @@ MODEL_FILE = (
     / "logistic_regression_day60.joblib"
 )
 
-OUTPUT_FILE = (
+SHAP_OUTPUT_FILE = (
     PROJECT_ROOT
     / "data"
     / "processed"
     / "learner_shap_explanations_BBB_2014J_day60.csv"
 )
+
+GLOBAL_SHAP_OUTPUT_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "global_shap_importance_BBB_2014J_day60.csv"
+)
+
+LLM_OUTPUT_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "learner_llm_explanations_BBB_2014J_day60.csv"
+)
+
+
+# =========================================================
+# OpenAI configuration
+# =========================================================
+
+OPENAI_MODEL = "gpt-5.5"
 
 
 # =========================================================
@@ -51,7 +75,7 @@ def load_inputs():
     Load:
         - Day-60 learner profiles
         - integrated neuro-symbolic decisions
-        - fitted Logistic Regression pipeline
+        - trained Logistic Regression model
     """
 
     required_files = [
@@ -61,34 +85,20 @@ def load_inputs():
     ]
 
     for file in required_files:
-
         if not file.exists():
             raise FileNotFoundError(
-                f"Required file not found:\n"
-                f"{file}"
+                f"Required file not found:\n{file}"
             )
 
-    profiles = pd.read_csv(
-        PROFILE_FILE
-    )
+    profiles = pd.read_csv(PROFILE_FILE)
+    integrated = pd.read_csv(INTEGRATED_FILE)
+    model = joblib.load(MODEL_FILE)
 
-    integrated = pd.read_csv(
-        INTEGRATED_FILE
-    )
-
-    model = joblib.load(
-        MODEL_FILE
-    )
-
-    return (
-        profiles,
-        integrated,
-        model,
-    )
+    return profiles, integrated, model
 
 
 # =========================================================
-# Prepare transformed model input
+# Prepare SHAP data
 # =========================================================
 
 def prepare_shap_data(
@@ -96,12 +106,8 @@ def prepare_shap_data(
     model,
 ):
     """
-    Reuse the exact feature engineering expected by the
-    trained model, then transform X using the saved
-    preprocessing pipeline.
-
-    This guarantees SHAP explains the same representation
-    used by Logistic Regression.
+    Prepare exactly the same transformed features used by
+    the trained Logistic Regression model.
     """
 
     (
@@ -109,9 +115,7 @@ def prepare_shap_data(
         y,
         learner_ids,
         model_features,
-    ) = prepare_features(
-        profiles
-    )
+    ) = prepare_features(profiles)
 
     preprocessor = model.named_steps[
         "preprocessor"
@@ -121,11 +125,7 @@ def prepare_shap_data(
         "classifier"
     ]
 
-    X_transformed = (
-        preprocessor.transform(
-            X
-        )
-    )
+    X_transformed = preprocessor.transform(X)
 
     feature_names = (
         preprocessor
@@ -142,12 +142,12 @@ def prepare_shap_data(
 
 
 # =========================================================
-# Clean feature names
+# Feature-name helper
 # =========================================================
 
 def clean_feature_name(name):
     """
-    Convert transformed names such as:
+    Convert:
 
         numeric__days_since_last_activity
 
@@ -157,10 +157,7 @@ def clean_feature_name(name):
     """
 
     if "__" in name:
-        return name.split(
-            "__",
-            1,
-        )[1]
+        return name.split("__", 1)[1]
 
     return name
 
@@ -174,7 +171,8 @@ def build_explainer(
     X_transformed,
 ):
     """
-    Build a SHAP LinearExplainer for Logistic Regression.
+    Build a SHAP LinearExplainer suitable for Logistic
+    Regression.
     """
 
     explainer = shap.LinearExplainer(
@@ -186,7 +184,7 @@ def build_explainer(
 
 
 # =========================================================
-# Calculate SHAP values
+# Calculate SHAP
 # =========================================================
 
 def calculate_shap_values(
@@ -194,24 +192,15 @@ def calculate_shap_values(
     X_transformed,
 ):
     """
-    Calculate learner-level SHAP values.
-
-    Positive SHAP value:
-        pushes prediction toward Fail/Withdraw.
-
-    Negative SHAP value:
-        pushes prediction toward Pass/Distinction.
+    Positive SHAP values push toward Fail/Withdraw.
+    Negative SHAP values push toward Pass/Distinction.
     """
 
-    shap_values = explainer(
-        X_transformed
-    )
-
-    return shap_values
+    return explainer(X_transformed)
 
 
 # =========================================================
-# Create learner-level explanations
+# Learner-level SHAP explanations
 # =========================================================
 
 def build_learner_explanations(
@@ -222,18 +211,11 @@ def build_learner_explanations(
     top_n=5,
 ):
     """
-    Produce compact learner-level feature contribution
-    explanations.
-
-    For each learner:
-        - strongest risk-increasing features
-        - strongest risk-reducing features
+    Build one compact SHAP explanation per learner.
     """
 
     cleaned_names = [
-        clean_feature_name(
-            name
-        )
+        clean_feature_name(name)
         for name in feature_names
     ]
 
@@ -251,15 +233,9 @@ def build_learner_explanations(
                     cleaned_names,
 
                 "shap_value":
-                    values[
-                        index
-                    ],
+                    values[index],
             }
         )
-
-        # -------------------------------------------------
-        # Risk-increasing contributions
-        # -------------------------------------------------
 
         positive = (
             contributions[
@@ -271,14 +247,8 @@ def build_learner_explanations(
                 "shap_value",
                 ascending=False,
             )
-            .head(
-                top_n
-            )
+            .head(top_n)
         )
-
-        # -------------------------------------------------
-        # Risk-reducing contributions
-        # -------------------------------------------------
 
         negative = (
             contributions[
@@ -290,43 +260,35 @@ def build_learner_explanations(
                 "shap_value",
                 ascending=True,
             )
-            .head(
-                top_n
-            )
+            .head(top_n)
         )
 
-        positive_features = (
-            "; ".join(
-                [
-                    (
-                        f"{row.feature}="
-                        f"{row.shap_value:.4f}"
-                    )
-                    for row
-                    in positive.itertuples()
-                ]
-            )
+        positive_features = "; ".join(
+            [
+                (
+                    f"{row.feature}="
+                    f"{row.shap_value:.4f}"
+                )
+                for row
+                in positive.itertuples()
+            ]
         )
 
-        negative_features = (
-            "; ".join(
-                [
-                    (
-                        f"{row.feature}="
-                        f"{row.shap_value:.4f}"
-                    )
-                    for row
-                    in negative.itertuples()
-                ]
-            )
+        negative_features = "; ".join(
+            [
+                (
+                    f"{row.feature}="
+                    f"{row.shap_value:.4f}"
+                )
+                for row
+                in negative.itertuples()
+            ]
         )
 
         rows.append(
             {
                 "id_student":
-                    int(
-                        learner_id
-                    ),
+                    int(learner_id),
 
                 "top_risk_increasing_features":
                     positive_features,
@@ -336,29 +298,38 @@ def build_learner_explanations(
             }
         )
 
-    explanations = pd.DataFrame(
-        rows
-    )
-
-    # -----------------------------------------------------
-    # Attach integrated decision context
-    # -----------------------------------------------------
+    explanations = pd.DataFrame(rows)
 
     context_columns = [
         "id_student",
         "ml_risk_probability",
         "ml_risk_band",
+        "weighted_assessment_average",
+        "assessment_trend",
+        "recent_14_day_clicks",
+        "previous_14_day_clicks",
+        "engagement_change",
+        "days_since_last_activity",
+        "assessment_completion_rate",
+        "performance_state",
+        "assessment_trend_state",
+        "engagement_state",
+        "inactivity_state",
+        "completion_state",
+        "evidence_sufficiency",
         "risk_state",
+        "intervention",
+        "rule_id",
+        "rule_explanation",
         "final_priority",
         "final_intervention",
         "integration_rule",
         "agreement_state",
+        "integration_explanation",
     ]
 
     explanations = explanations.merge(
-        integrated[
-            context_columns
-        ],
+        integrated[context_columns],
         on="id_student",
         how="left",
         validate="one_to_one",
@@ -368,14 +339,58 @@ def build_learner_explanations(
 
 
 # =========================================================
-# Validation
+# Global SHAP importance
+# =========================================================
+
+def calculate_global_importance(
+    feature_names,
+    shap_values,
+):
+    """
+    Calculate global mean absolute SHAP importance.
+    """
+
+    cleaned_names = [
+        clean_feature_name(name)
+        for name in feature_names
+    ]
+
+    mean_absolute = (
+        np.abs(shap_values.values)
+        .mean(axis=0)
+    )
+
+    importance = pd.DataFrame(
+        {
+            "feature":
+                cleaned_names,
+
+            "mean_absolute_shap":
+                mean_absolute,
+        }
+    )
+
+    importance = (
+        importance
+        .sort_values(
+            "mean_absolute_shap",
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )
+
+    return importance
+
+
+# =========================================================
+# SHAP validation
 # =========================================================
 
 def validate_explanations(
     explanations,
 ):
     """
-    Validate SHAP explanation coverage.
+    Validate learner-level SHAP coverage.
     """
 
     print(
@@ -391,6 +406,30 @@ def validate_explanations(
         "=" * 70
     )
 
+    duplicate_count = (
+        explanations[
+            "id_student"
+        ]
+        .duplicated()
+        .sum()
+    )
+
+    missing_ml = (
+        explanations[
+            "ml_risk_probability"
+        ]
+        .isna()
+        .sum()
+    )
+
+    missing_priority = (
+        explanations[
+            "final_priority"
+        ]
+        .isna()
+        .sum()
+    )
+
     print(
         f"Learners explained: "
         f"{len(explanations):,}"
@@ -398,32 +437,23 @@ def validate_explanations(
 
     print(
         f"Duplicate learners: "
-        f"{explanations['id_student'].duplicated().sum()}"
+        f"{duplicate_count}"
     )
 
     print(
         f"Missing ML probabilities: "
-        f"{explanations['ml_risk_probability'].isna().sum()}"
+        f"{missing_ml}"
     )
 
     print(
         f"Missing final priorities: "
-        f"{explanations['final_priority'].isna().sum()}"
+        f"{missing_priority}"
     )
 
     if (
-        explanations[
-            "id_student"
-        ]
-        .duplicated()
-        .sum()
-        == 0
-        and explanations[
-            "ml_risk_probability"
-        ]
-        .isna()
-        .sum()
-        == 0
+        duplicate_count == 0
+        and missing_ml == 0
+        and missing_priority == 0
     ):
 
         print(
@@ -438,15 +468,15 @@ def validate_explanations(
 
 
 # =========================================================
-# Print example explanations
+# Print SHAP examples
 # =========================================================
 
-def print_examples(
+def print_shap_examples(
     explanations,
     n=10,
 ):
     """
-    Print representative SHAP explanations.
+    Display representative learner-level SHAP results.
     """
 
     columns = [
@@ -477,66 +507,349 @@ def print_examples(
         explanations[
             columns
         ]
-        .head(
-            n
-        )
-        .to_string(
-            index=False
-        )
+        .head(n)
+        .to_string(index=False)
     )
 
 
 # =========================================================
-# Global SHAP importance
+# OpenAI client
 # =========================================================
 
-def calculate_global_importance(
-    feature_names,
-    shap_values,
+def get_openai_client():
+    """
+    Return an OpenAI client using the temporary environment
+    variable OPENAI_API_KEY.
+
+    The API key must not be hard-coded into this project.
+    """
+
+    api_key = os.getenv(
+        "OPENAI_API_KEY"
+    )
+
+    if not api_key:
+        return None
+
+    return OpenAI(
+        api_key=api_key
+    )
+
+
+# =========================================================
+# Build grounded learner evidence
+# =========================================================
+
+def build_llm_evidence(
+    learner_row,
 ):
     """
-    Calculate global feature importance using mean absolute
-    SHAP values.
+    Construct a structured textual representation of the
+    already-established learner evidence.
+
+    The LLM receives conclusions generated by the system.
+    It does not receive raw OULAD records.
     """
 
-    cleaned_names = [
-        clean_feature_name(
-            name
-        )
-        for name in feature_names
+    evidence = f"""
+Learner observation point:
+Day 60
+
+Predictive model:
+Risk probability: {learner_row['ml_risk_probability']:.3f}
+ML risk band: {learner_row['ml_risk_band']}
+
+Numerical evidence:
+Weighted assessment average: {learner_row['weighted_assessment_average']}
+Assessment trend: {learner_row['assessment_trend']}
+Recent 14-day clicks: {learner_row['recent_14_day_clicks']}
+Previous 14-day clicks: {learner_row['previous_14_day_clicks']}
+Engagement change: {learner_row['engagement_change']}
+Days since last activity: {learner_row['days_since_last_activity']}
+Assessment completion rate: {learner_row['assessment_completion_rate']}
+
+Semantic evidence:
+Performance state: {learner_row['performance_state']}
+Assessment trend state: {learner_row['assessment_trend_state']}
+Engagement state: {learner_row['engagement_state']}
+Inactivity state: {learner_row['inactivity_state']}
+Completion state: {learner_row['completion_state']}
+Evidence sufficiency: {learner_row['evidence_sufficiency']}
+
+Symbolic reasoning:
+Symbolic risk state: {learner_row['risk_state']}
+Symbolic intervention: {learner_row['intervention']}
+Symbolic rule: {learner_row['rule_id']}
+Symbolic rule explanation:
+{learner_row['rule_explanation']}
+
+Neuro-symbolic integration:
+Final priority: {learner_row['final_priority']}
+Final intervention: {learner_row['final_intervention']}
+Integration rule: {learner_row['integration_rule']}
+Agreement state: {learner_row['agreement_state']}
+Integration explanation:
+{learner_row['integration_explanation']}
+
+SHAP risk-increasing factors:
+{learner_row['top_risk_increasing_features']}
+
+SHAP risk-reducing factors:
+{learner_row['top_risk_reducing_features']}
+"""
+
+    return evidence.strip()
+
+
+# =========================================================
+# Generate one grounded LLM explanation
+# =========================================================
+
+def generate_llm_explanation(
+    learner_row,
+    client,
+):
+    """
+    Generate an educator-facing explanation.
+
+    The LLM is strictly a communication layer.
+
+    It must not:
+        - change the decision
+        - invent evidence
+        - infer motivation
+        - infer personal circumstances
+        - diagnose the learner
+        - create a new intervention
+    """
+
+    evidence = build_llm_evidence(
+        learner_row
+    )
+
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        instructions=(
+            "You are an explanation component inside an "
+            "educational decision-support prototype. "
+
+            "Write a concise educator-facing explanation "
+            "using only the supplied structured evidence. "
+
+            "Do not invent learner circumstances, motives, "
+            "behavioural causes, diagnoses, personal details, "
+            "or academic facts that are not explicitly "
+            "provided. "
+
+            "Do not change the supplied ML probability, "
+            "symbolic risk state, final priority, or final "
+            "intervention. "
+
+            "Clearly distinguish observed evidence from model "
+            "prediction. "
+
+            "If evidence is partial or insufficient, say so. "
+
+            "If probabilistic and symbolic components disagree "
+            "or show mixed evidence, explicitly mention that. "
+
+            "Present the recommendation as decision support "
+            "for an educator and not as an automatic or final "
+            "determination. "
+
+            "Use approximately 80 to 130 words."
+        ),
+        input=evidence,
+    )
+
+    return response.output_text
+
+
+# =========================================================
+# Select representative learners
+# =========================================================
+
+def select_llm_examples(
+    explanations,
+):
+    """
+    Select one learner from each important final-priority
+    category.
+
+    This avoids making 2,292 API calls during prototype
+    development.
+    """
+
+    priorities = [
+        "HighPriority",
+        "HumanReviewPriority",
+        "ModeratePriority",
+        "LowPriority",
     ]
 
-    mean_absolute = (
-        np.abs(
-            shap_values.values
+    selected_rows = []
+
+    for priority in priorities:
+
+        subset = explanations[
+            explanations[
+                "final_priority"
+            ] == priority
+        ]
+
+        if subset.empty:
+            continue
+
+        # Prefer the highest ML probability within the
+        # category for a clear demonstration example.
+
+        example = (
+            subset
+            .sort_values(
+                "ml_risk_probability",
+                ascending=False,
+            )
+            .iloc[0]
         )
-        .mean(
-            axis=0
+
+        selected_rows.append(
+            example
         )
+
+    if not selected_rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(
+        selected_rows
+    ).reset_index(
+        drop=True
     )
 
-    importance = pd.DataFrame(
-        {
-            "feature":
-                cleaned_names,
 
-            "mean_absolute_shap":
-                mean_absolute,
-        }
+# =========================================================
+# Generate representative LLM explanations
+# =========================================================
+
+def generate_representative_llm_explanations(
+    explanations,
+):
+    """
+    Generate LLM explanations for a small representative
+    subset of learners.
+
+    The function returns an empty DataFrame if no API key is
+    configured.
+    """
+
+    client = get_openai_client()
+
+    if client is None:
+
+        print(
+            "\nOPENAI_API_KEY is not configured."
+        )
+
+        print(
+            "Skipping LLM explanation generation."
+        )
+
+        return pd.DataFrame()
+
+    selected = select_llm_examples(
+        explanations
     )
 
-    importance = (
-        importance
-        .sort_values(
-            "mean_absolute_shap",
-            ascending=False,
-        )
-        .reset_index(
-            drop=True
-        )
+    rows = []
+
+    print(
+        "\n"
+        + "=" * 70
     )
 
-    return importance
+    print(
+        "GROUNDED LLM EDUCATOR EXPLANATIONS"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    for _, learner in selected.iterrows():
+
+        try:
+
+            explanation = (
+                generate_llm_explanation(
+                    learner,
+                    client,
+                )
+            )
+
+        except Exception as exc:
+
+            explanation = (
+                "LLM explanation generation failed: "
+                f"{exc}"
+            )
+
+        print(
+            f"\nLearner: "
+            f"{int(learner['id_student'])}"
+        )
+
+        print(
+            f"Priority: "
+            f"{learner['final_priority']}"
+        )
+
+        print(
+            f"Risk probability: "
+            f"{learner['ml_risk_probability']:.3f}"
+        )
+
+        print()
+
+        print(
+            explanation
+        )
+
+        rows.append(
+            {
+                "id_student":
+                    int(
+                        learner[
+                            "id_student"
+                        ]
+                    ),
+
+                "ml_risk_probability":
+                    learner[
+                        "ml_risk_probability"
+                    ],
+
+                "final_priority":
+                    learner[
+                        "final_priority"
+                    ],
+
+                "final_intervention":
+                    learner[
+                        "final_intervention"
+                    ],
+
+                "agreement_state":
+                    learner[
+                        "agreement_state"
+                    ],
+
+                "llm_explanation":
+                    explanation,
+            }
+        )
+
+    return pd.DataFrame(
+        rows
+    )
 
 
 # =========================================================
@@ -546,28 +859,24 @@ def calculate_global_importance(
 def save_outputs(
     explanations,
     global_importance,
+    llm_explanations,
 ):
     """
-    Save local and global SHAP explanation results.
+    Save SHAP and LLM explanation outputs.
     """
 
-    OUTPUT_FILE.parent.mkdir(
+    SHAP_OUTPUT_FILE.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     explanations.to_csv(
-        OUTPUT_FILE,
+        SHAP_OUTPUT_FILE,
         index=False,
     )
 
-    global_file = (
-        OUTPUT_FILE.parent
-        / "global_shap_importance_BBB_2014J_day60.csv"
-    )
-
     global_importance.to_csv(
-        global_file,
+        GLOBAL_SHAP_OUTPUT_FILE,
         index=False,
     )
 
@@ -576,7 +885,7 @@ def save_outputs(
     )
 
     print(
-        OUTPUT_FILE
+        SHAP_OUTPUT_FILE
     )
 
     print(
@@ -584,8 +893,23 @@ def save_outputs(
     )
 
     print(
-        global_file
+        GLOBAL_SHAP_OUTPUT_FILE
     )
+
+    if not llm_explanations.empty:
+
+        llm_explanations.to_csv(
+            LLM_OUTPUT_FILE,
+            index=False,
+        )
+
+        print(
+            "\nSaved representative LLM explanations:"
+        )
+
+        print(
+            LLM_OUTPUT_FILE
+        )
 
 
 # =========================================================
@@ -595,11 +919,11 @@ def save_outputs(
 if __name__ == "__main__":
 
     print(
-        "\nGenerating SHAP explanations..."
+        "\nGenerating explainable learner decisions..."
     )
 
     # -----------------------------------------------------
-    # 1. Load inputs
+    # 1. Load existing model and decision outputs
     # -----------------------------------------------------
 
     (
@@ -614,7 +938,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 2. Prepare model representation
+    # 2. Prepare transformed ML features
     # -----------------------------------------------------
 
     (
@@ -634,7 +958,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 3. Create SHAP explainer
+    # 3. Build SHAP explainer
     # -----------------------------------------------------
 
     explainer = build_explainer(
@@ -643,12 +967,14 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 4. Calculate SHAP
+    # 4. Calculate SHAP values
     # -----------------------------------------------------
 
-    shap_values = calculate_shap_values(
-        explainer,
-        X_transformed,
+    shap_values = (
+        calculate_shap_values(
+            explainer,
+            X_transformed,
+        )
     )
 
     print(
@@ -657,7 +983,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 5. Learner-level explanations
+    # 5. Build learner-level SHAP explanations
     # -----------------------------------------------------
 
     explanations = (
@@ -671,7 +997,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 6. Global feature importance
+    # 6. Calculate global SHAP importance
     # -----------------------------------------------------
 
     global_importance = (
@@ -682,7 +1008,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 7. Validate
+    # 7. Validate SHAP coverage
     # -----------------------------------------------------
 
     validate_explanations(
@@ -690,10 +1016,10 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 8. Display examples
+    # 8. Print SHAP examples
     # -----------------------------------------------------
 
-    print_examples(
+    print_shap_examples(
         explanations,
         n=10,
     )
@@ -720,12 +1046,26 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 9. Save
+    # 9. Generate representative LLM explanations
+    #
+    # Only four representative learners are sent to the
+    # API during prototype development.
+    # -----------------------------------------------------
+
+    llm_explanations = (
+        generate_representative_llm_explanations(
+            explanations
+        )
+    )
+
+    # -----------------------------------------------------
+    # 10. Save outputs
     # -----------------------------------------------------
 
     save_outputs(
-        explanations,
-        global_importance,
+        explanations=explanations,
+        global_importance=global_importance,
+        llm_explanations=llm_explanations,
     )
 
     print(
@@ -734,7 +1074,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "SHAP EXPLANATION GENERATION COMPLETE"
+        "EXPLANATION PIPELINE COMPLETE"
     )
 
     print(
