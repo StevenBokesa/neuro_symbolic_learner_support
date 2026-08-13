@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
-from rdflib import Graph, Namespace, RDF
+from rdflib import Graph, Namespace
 
 
 # ---------------------------------------------------------
@@ -24,6 +24,13 @@ RULE_OUTPUT_FILE = (
     / "learner_rule_results_BBB_2014J_day60.csv"
 )
 
+REASONED_GRAPH_OUTPUT_FILE = (
+    PROJECT_ROOT
+    / "outputs"
+    / "graphs"
+    / "learner_graph_reasoned_BBB_2014J_day60.ttl"
+)
+
 
 # ---------------------------------------------------------
 # Namespace
@@ -35,12 +42,13 @@ LS = Namespace(
 
 
 # ---------------------------------------------------------
-# Load graph
+# Load RDF knowledge graph
 # ---------------------------------------------------------
 
 def load_graph():
     """
-    Load the RDF learner knowledge graph.
+    Load the RDF learner knowledge graph produced by
+    src.knowledge_graph.
     """
 
     if not GRAPH_INPUT_FILE.exists():
@@ -68,29 +76,33 @@ def load_graph():
 
 
 # ---------------------------------------------------------
-# Helper
+# URI helper
 # ---------------------------------------------------------
 
 def local_name(uri):
     """
-    Extract local RDF identifier.
+    Extract the final RDF identifier from a URI.
 
     Example:
+
         http://example.org/learner-support/Inactive
-        -> Inactive
+
+    becomes:
+
+        Inactive
     """
 
     return str(uri).split("/")[-1]
 
 
 # ---------------------------------------------------------
-# Extract observations from graph
+# Extract learner evidence from RDF graph
 # ---------------------------------------------------------
 
 def extract_observations(graph):
     """
-    Read the symbolic evidence associated with each learner
-    observation from the RDF graph.
+    Query the knowledge graph and reconstruct one symbolic
+    evidence row per learner observation.
     """
 
     query = """
@@ -124,43 +136,61 @@ def extract_observations(graph):
     }
     """
 
-    results = []
+    rows = []
 
     for row in graph.query(query):
 
-        results.append(
+        rows.append(
             {
                 "learner":
-                    local_name(row.learner),
+                    local_name(
+                        row.learner
+                    ),
 
                 "observation":
-                    local_name(row.observation),
+                    local_name(
+                        row.observation
+                    ),
 
                 "performance_state":
-                    local_name(row.performance),
+                    local_name(
+                        row.performance
+                    ),
 
                 "assessment_trend_state":
-                    local_name(row.trend),
+                    local_name(
+                        row.trend
+                    ),
 
                 "engagement_state":
-                    local_name(row.engagement),
+                    local_name(
+                        row.engagement
+                    ),
 
                 "inactivity_state":
-                    local_name(row.inactivity),
+                    local_name(
+                        row.inactivity
+                    ),
 
                 "completion_state":
-                    local_name(row.completion),
+                    local_name(
+                        row.completion
+                    ),
 
                 "submission_state":
-                    local_name(row.submission),
+                    local_name(
+                        row.submission
+                    ),
 
                 "evidence_sufficiency":
-                    local_name(row.evidence),
+                    local_name(
+                        row.evidence
+                    ),
             }
         )
 
     return pd.DataFrame(
-        results
+        rows
     )
 
 
@@ -170,10 +200,17 @@ def extract_observations(graph):
 
 def apply_symbolic_rules(row):
     """
-    Apply transparent intervention rules.
+    Apply transparent symbolic learner-support rules.
 
-    Rule ordering matters:
-    the first matching rule is selected.
+    Rule priority:
+
+        1. Specific high-risk patterns
+        2. Moderate-risk observable patterns
+        3. Healthy / low-risk patterns
+        4. Evidence-sufficiency fallbacks
+        5. Default fallback
+
+    The first matching rule is returned.
 
     Output:
         risk_state
@@ -184,6 +221,10 @@ def apply_symbolic_rules(row):
 
     performance = row[
         "performance_state"
+    ]
+
+    trend = row[
+        "assessment_trend_state"
     ]
 
     engagement = row[
@@ -202,68 +243,12 @@ def apply_symbolic_rules(row):
         "evidence_sufficiency"
     ]
 
-    trend = row[
-        "assessment_trend_state"
-    ]
-
     # -----------------------------------------------------
-    # Rule 1
+    # R1
     #
-    # Insufficient evidence should not automatically be
-    # interpreted as high risk.
-    # -----------------------------------------------------
-
-    if evidence == "InsufficientEvidence":
-
-        return {
-            "risk_state":
-                "UncertainRisk",
-
-            "intervention":
-                "ContinueMonitoring",
-
-            "rule_id":
-                "R1",
-
-            "rule_explanation":
-                (
-                    "Insufficient assessment and engagement "
-                    "evidence is available for a reliable "
-                    "intervention decision."
-                ),
-        }
-
-    # -----------------------------------------------------
-    # Rule 2
+    # No assessment submission + prolonged inactivity
     #
-    # Partial evidence means the system should remain
-    # cautious.
-    # -----------------------------------------------------
-
-    if evidence == "PartialEvidence":
-
-        return {
-            "risk_state":
-                "UncertainRisk",
-
-            "intervention":
-                "ContinueMonitoring",
-
-            "rule_id":
-                "R2",
-
-            "rule_explanation":
-                (
-                    "Only partial learner evidence is "
-                    "available, so continued monitoring is "
-                    "recommended before stronger action."
-                ),
-        }
-
-    # -----------------------------------------------------
-    # Rule 3
-    #
-    # No assessment submission + high inactivity
+    # This is evaluated before evidence-sufficiency rules.
     # -----------------------------------------------------
 
     if (
@@ -279,20 +264,20 @@ def apply_symbolic_rules(row):
                 "TutorReview",
 
             "rule_id":
-                "R3",
+                "R1",
 
             "rule_explanation":
                 (
                     "The learner has submitted no required "
-                    "assessment and is highly inactive."
+                    "assessment and has been highly inactive."
                 ),
         }
 
     # -----------------------------------------------------
-    # Rule 4
+    # R2
     #
-    # Low/borderline performance + sharply declining
-    # engagement + inactivity
+    # Weak performance + sharply declining engagement
+    # + sustained inactivity
     # -----------------------------------------------------
 
     if (
@@ -318,7 +303,7 @@ def apply_symbolic_rules(row):
                 "TutorReview",
 
             "rule_id":
-                "R4",
+                "R2",
 
             "rule_explanation":
                 (
@@ -329,10 +314,9 @@ def apply_symbolic_rules(row):
         }
 
     # -----------------------------------------------------
-    # Rule 5
+    # R3
     #
-    # Strongly declining assessment + strongly declining
-    # engagement
+    # Assessment and engagement are both sharply declining.
     # -----------------------------------------------------
 
     if (
@@ -350,7 +334,7 @@ def apply_symbolic_rules(row):
                 "ContactLearner",
 
             "rule_id":
-                "R5",
+                "R3",
 
             "rule_explanation":
                 (
@@ -360,9 +344,10 @@ def apply_symbolic_rules(row):
         }
 
     # -----------------------------------------------------
-    # Rule 6
+    # R4
     #
-    # Satisfactory performance but engagement decline.
+    # Performance currently acceptable, but engagement is
+    # deteriorating.
     # -----------------------------------------------------
 
     if (
@@ -383,22 +368,25 @@ def apply_symbolic_rules(row):
                 "ContactLearner",
 
             "rule_id":
-                "R6",
+                "R4",
 
             "rule_explanation":
                 (
                     "Current performance is satisfactory, "
-                    "but engagement is declining."
+                    "but learner engagement is declining."
                 ),
         }
 
     # -----------------------------------------------------
-    # Rule 7
+    # R5
     #
-    # Inactivity concern
+    # Highly inactive learner.
     # -----------------------------------------------------
 
-    if inactivity == "HighlyInactive":
+    if (
+        inactivity
+        == "HighlyInactive"
+    ):
 
         return {
             "risk_state":
@@ -408,7 +396,7 @@ def apply_symbolic_rules(row):
                 "AutomatedReminder",
 
             "rule_id":
-                "R7",
+                "R5",
 
             "rule_explanation":
                 (
@@ -418,9 +406,9 @@ def apply_symbolic_rules(row):
         }
 
     # -----------------------------------------------------
-    # Rule 8
+    # R6
     #
-    # Healthy profile
+    # Healthy profile.
     # -----------------------------------------------------
 
     if (
@@ -445,18 +433,80 @@ def apply_symbolic_rules(row):
                 "ContinueMonitoring",
 
             "rule_id":
-                "R8",
+                "R6",
 
             "rule_explanation":
                 (
                     "The learner shows satisfactory or "
-                    "strong performance, is active, and has "
-                    "completed the required assessments."
+                    "strong performance, remains active, and "
+                    "has completed the required assessments."
                 ),
         }
 
     # -----------------------------------------------------
-    # Default rule
+    # R7
+    #
+    # Insufficient evidence fallback.
+    #
+    # Missing data must not automatically become high risk.
+    # -----------------------------------------------------
+
+    if (
+        evidence
+        == "InsufficientEvidence"
+    ):
+
+        return {
+            "risk_state":
+                "UncertainRisk",
+
+            "intervention":
+                "ContinueMonitoring",
+
+            "rule_id":
+                "R7",
+
+            "rule_explanation":
+                (
+                    "Insufficient assessment and engagement "
+                    "evidence is available for a reliable "
+                    "intervention decision."
+                ),
+        }
+
+    # -----------------------------------------------------
+    # R8
+    #
+    # Partial evidence fallback.
+    # -----------------------------------------------------
+
+    if (
+        evidence
+        == "PartialEvidence"
+    ):
+
+        return {
+            "risk_state":
+                "UncertainRisk",
+
+            "intervention":
+                "ContinueMonitoring",
+
+            "rule_id":
+                "R8",
+
+            "rule_explanation":
+                (
+                    "Only partial learner evidence is "
+                    "available, so continued monitoring is "
+                    "recommended before stronger action."
+                ),
+        }
+
+    # -----------------------------------------------------
+    # R9
+    #
+    # Default fallback.
     # -----------------------------------------------------
 
     return {
@@ -472,45 +522,49 @@ def apply_symbolic_rules(row):
         "rule_explanation":
             (
                 "The learner shows some indicators that do "
-                "not meet a higher-priority intervention "
-                "rule."
+                "not meet the criteria for a higher-priority "
+                "or low-risk rule."
             ),
     }
 
 
 # ---------------------------------------------------------
-# Apply rules to all learners
+# Run rule engine
 # ---------------------------------------------------------
 
-def run_rule_engine(observations):
+def run_rule_engine(
+    observations,
+):
     """
     Apply the symbolic rules to every learner observation.
     """
 
-    outputs = observations.apply(
+    rule_outputs = observations.apply(
         apply_symbolic_rules,
         axis=1,
     )
 
-    outputs = pd.DataFrame(
-        outputs.tolist()
+    rule_outputs = pd.DataFrame(
+        rule_outputs.tolist()
     )
 
-    return pd.concat(
+    combined = pd.concat(
         [
             observations.reset_index(
                 drop=True
             ),
-            outputs.reset_index(
+            rule_outputs.reset_index(
                 drop=True
             ),
         ],
         axis=1,
     )
 
+    return combined
+
 
 # ---------------------------------------------------------
-# Add rule conclusions back to RDF graph
+# Add conclusions to RDF graph
 # ---------------------------------------------------------
 
 def add_rule_results_to_graph(
@@ -518,7 +572,8 @@ def add_rule_results_to_graph(
     rule_results,
 ):
     """
-    Add symbolic risk-state conclusions to the RDF graph.
+    Add symbolic risk-state and intervention conclusions
+    back into the RDF knowledge graph.
 
     Example:
 
@@ -530,15 +585,21 @@ def add_rule_results_to_graph(
     for _, row in rule_results.iterrows():
 
         observation = LS[
-            row["observation"]
+            row[
+                "observation"
+            ]
         ]
 
         risk_state = LS[
-            row["risk_state"]
+            row[
+                "risk_state"
+            ]
         ]
 
         intervention = LS[
-            row["intervention"]
+            row[
+                "intervention"
+            ]
         ]
 
         graph.add(
@@ -561,14 +622,15 @@ def add_rule_results_to_graph(
 
 
 # ---------------------------------------------------------
-# Validation
+# Validate rule results
 # ---------------------------------------------------------
 
 def validate_rule_results(
     rule_results,
 ):
     """
-    Display rule coverage and risk-state distributions.
+    Display rule coverage, risk-state distribution and
+    intervention distribution.
     """
 
     print(
@@ -589,6 +651,10 @@ def validate_rule_results(
         f"{len(rule_results):,}"
     )
 
+    # -----------------------------------------------------
+    # Risk distribution
+    # -----------------------------------------------------
+
     print(
         "\nRisk-state distribution"
     )
@@ -603,6 +669,10 @@ def validate_rule_results(
         ]
         .value_counts()
     )
+
+    # -----------------------------------------------------
+    # Intervention distribution
+    # -----------------------------------------------------
 
     print(
         "\nIntervention distribution"
@@ -619,6 +689,10 @@ def validate_rule_results(
         .value_counts()
     )
 
+    # -----------------------------------------------------
+    # Rule coverage
+    # -----------------------------------------------------
+
     print(
         "\nRule coverage"
     )
@@ -627,7 +701,7 @@ def validate_rule_results(
         "-" * 50
     )
 
-    print(
+    coverage = (
         rule_results[
             "rule_id"
         ]
@@ -635,9 +709,44 @@ def validate_rule_results(
         .sort_index()
     )
 
+    print(
+        coverage
+    )
+
+    # -----------------------------------------------------
+    # Check whether every learner received exactly one rule
+    # -----------------------------------------------------
+
+    if len(rule_results) > 0:
+
+        missing_rules = (
+            rule_results[
+                "rule_id"
+            ]
+            .isna()
+            .sum()
+        )
+
+        print(
+            f"\nLearners without a rule: "
+            f"{missing_rules}"
+        )
+
+        if missing_rules == 0:
+
+            print(
+                "Rule assignment check: PASS"
+            )
+
+        else:
+
+            print(
+                "Rule assignment check: FAIL"
+            )
+
 
 # ---------------------------------------------------------
-# Show example rule decisions
+# Print examples
 # ---------------------------------------------------------
 
 def print_examples(
@@ -645,12 +754,13 @@ def print_examples(
     n=15,
 ):
     """
-    Print learner-level symbolic reasoning examples.
+    Print a sample of learner decisions.
     """
 
     columns = [
         "learner",
         "performance_state",
+        "assessment_trend_state",
         "engagement_state",
         "inactivity_state",
         "completion_state",
@@ -677,7 +787,9 @@ def print_examples(
         rule_results[
             columns
         ]
-        .head(n)
+        .head(
+            n
+        )
         .to_string(
             index=False
         )
@@ -685,96 +797,80 @@ def print_examples(
 
 
 # ---------------------------------------------------------
-# Save updated graph
+# Print examples specifically for TutorReview
 # ---------------------------------------------------------
 
-def save_reasoned_graph(
-    graph,
+def print_tutor_review_examples(
+    rule_results,
+    n=10,
 ):
     """
-    Save graph after adding symbolic reasoning results.
+    Print several high-priority tutor-review cases.
     """
 
-    output_file = (
-        PROJECT_ROOT
-        / "outputs"
-        / "graphs"
-        / "learner_graph_reasoned_BBB_2014J_day60.ttl"
-    )
+    tutor_cases = rule_results[
+        rule_results[
+            "intervention"
+        ]
+        == "TutorReview"
+    ]
 
-    graph.serialize(
-        destination=str(
-            output_file
-        ),
-        format="turtle",
+    print(
+        "\n"
+        + "=" * 70
     )
 
     print(
-        "\nSaved reasoned knowledge graph:"
+        "EXAMPLE TUTOR REVIEW CASES"
     )
 
     print(
-        output_file
+        "=" * 70
+    )
+
+    if tutor_cases.empty:
+
+        print(
+            "No TutorReview cases were generated."
+        )
+
+        return
+
+    columns = [
+        "learner",
+        "performance_state",
+        "engagement_state",
+        "inactivity_state",
+        "completion_state",
+        "evidence_sufficiency",
+        "risk_state",
+        "rule_id",
+        "rule_explanation",
+    ]
+
+    print(
+        tutor_cases[
+            columns
+        ]
+        .head(
+            n
+        )
+        .to_string(
+            index=False
+        )
     )
 
 
 # ---------------------------------------------------------
-# Main
+# Save tabular rule results
 # ---------------------------------------------------------
 
-if __name__ == "__main__":
-
-    print(
-        "\nRunning symbolic intervention rules..."
-    )
-
-    # -----------------------------------------------------
-    # 1. Load knowledge graph
-    # -----------------------------------------------------
-
-    graph = load_graph()
-
-    print(
-        f"Knowledge graph triples loaded: "
-        f"{len(graph):,}"
-    )
-
-    # -----------------------------------------------------
-    # 2. Extract learner observations
-    # -----------------------------------------------------
-
-    observations = extract_observations(
-        graph
-    )
-
-    print(
-        f"Learner observations extracted: "
-        f"{len(observations):,}"
-    )
-
-    # -----------------------------------------------------
-    # 3. Run symbolic rules
-    # -----------------------------------------------------
-
-    rule_results = run_rule_engine(
-        observations
-    )
-
-    # -----------------------------------------------------
-    # 4. Validate
-    # -----------------------------------------------------
-
-    validate_rule_results(
-        rule_results
-    )
-
-    print_examples(
-        rule_results
-    )
-
-    # -----------------------------------------------------
-    # 5. Save tabular rule results
-    # -----------------------------------------------------
+def save_rule_results(
+    rule_results,
+):
+    """
+    Save learner-level symbolic reasoning results.
+    """
 
     RULE_OUTPUT_FILE.parent.mkdir(
         parents=True,
@@ -794,8 +890,114 @@ if __name__ == "__main__":
         RULE_OUTPUT_FILE
     )
 
+
+# ---------------------------------------------------------
+# Save updated RDF graph
+# ---------------------------------------------------------
+
+def save_reasoned_graph(
+    graph,
+):
+    """
+    Serialize the knowledge graph after symbolic rule
+    conclusions have been added.
+    """
+
+    REASONED_GRAPH_OUTPUT_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    graph.serialize(
+        destination=str(
+            REASONED_GRAPH_OUTPUT_FILE
+        ),
+        format="turtle",
+    )
+
+    print(
+        "\nSaved reasoned knowledge graph:"
+    )
+
+    print(
+        REASONED_GRAPH_OUTPUT_FILE
+    )
+
+
+# ---------------------------------------------------------
+# Main
+# ---------------------------------------------------------
+
+if __name__ == "__main__":
+
+    print(
+        "\nRunning symbolic intervention rules..."
+    )
+
     # -----------------------------------------------------
-    # 6. Add conclusions to RDF graph
+    # 1. Load RDF knowledge graph
+    # -----------------------------------------------------
+
+    graph = load_graph()
+
+    print(
+        f"Knowledge graph triples loaded: "
+        f"{len(graph):,}"
+    )
+
+    # -----------------------------------------------------
+    # 2. Extract learner evidence
+    # -----------------------------------------------------
+
+    observations = extract_observations(
+        graph
+    )
+
+    print(
+        f"Learner observations extracted: "
+        f"{len(observations):,}"
+    )
+
+    # -----------------------------------------------------
+    # 3. Run rule engine
+    # -----------------------------------------------------
+
+    rule_results = run_rule_engine(
+        observations
+    )
+
+    # -----------------------------------------------------
+    # 4. Validate rule behaviour
+    # -----------------------------------------------------
+
+    validate_rule_results(
+        rule_results
+    )
+
+    # -----------------------------------------------------
+    # 5. Display examples
+    # -----------------------------------------------------
+
+    print_examples(
+        rule_results,
+        n=15,
+    )
+
+    print_tutor_review_examples(
+        rule_results,
+        n=10,
+    )
+
+    # -----------------------------------------------------
+    # 6. Save tabular results
+    # -----------------------------------------------------
+
+    save_rule_results(
+        rule_results
+    )
+
+    # -----------------------------------------------------
+    # 7. Add rule conclusions to RDF graph
     # -----------------------------------------------------
 
     graph = add_rule_results_to_graph(
@@ -804,12 +1006,16 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 7. Save updated knowledge graph
+    # 8. Save reasoned graph
     # -----------------------------------------------------
 
     save_reasoned_graph(
         graph
     )
+
+    # -----------------------------------------------------
+    # 9. Complete
+    # -----------------------------------------------------
 
     print(
         "\n"
