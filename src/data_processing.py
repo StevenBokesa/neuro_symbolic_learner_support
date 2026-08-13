@@ -63,11 +63,21 @@ def filter_module_presentation(
     code_presentation,
 ):
     """
-    Filter OULAD tables to one module and presentation
-    where those columns are available.
+    Scope all OULAD tables to one module presentation.
+
+    Most OULAD tables contain code_module and
+    code_presentation directly.
+
+    studentAssessment does not contain those columns, so
+    it must be scoped indirectly through id_assessment.
     """
 
     filtered = {}
+
+    # -----------------------------------------------------
+    # First filter tables that directly contain the module
+    # and presentation identifiers.
+    # -----------------------------------------------------
 
     for name, df in tables.items():
 
@@ -87,6 +97,57 @@ def filter_module_presentation(
         else:
             filtered[name] = df.copy()
 
+    # -----------------------------------------------------
+    # Scope studentAssessment through assessments.
+    #
+    # Relationship:
+    #
+    # studentAssessment.id_assessment
+    #              ↓
+    # assessments.id_assessment
+    #              ↓
+    # code_module + code_presentation
+    # -----------------------------------------------------
+
+    scoped_assessment_ids = (
+        filtered["assessments"][
+            "id_assessment"
+        ]
+        .unique()
+    )
+
+    filtered["student_assessment"] = (
+        tables["student_assessment"][
+            tables["student_assessment"][
+                "id_assessment"
+            ].isin(scoped_assessment_ids)
+        ]
+        .copy()
+    )
+
+    # -----------------------------------------------------
+    # Extra safety check:
+    #
+    # Only keep assessment submissions belonging to
+    # learners enrolled in this module presentation.
+    # -----------------------------------------------------
+
+    scoped_learner_ids = (
+        filtered["student_info"][
+            "id_student"
+        ]
+        .unique()
+    )
+
+    filtered["student_assessment"] = (
+        filtered["student_assessment"][
+            filtered["student_assessment"][
+                "id_student"
+            ].isin(scoped_learner_ids)
+        ]
+        .copy()
+    )
+
     return filtered
 
 
@@ -99,11 +160,11 @@ def filter_to_cutoff_day(
     cutoff_day=60,
 ):
     """
-    Restrict time-dependent records to information
-    available on or before the selected course day.
+    Restrict time-dependent records to evidence available
+    on or before the selected course day.
 
-    This prevents future information from leaking into
-    an earlier learner-risk prediction.
+    This is essential to prevent future information from
+    leaking into an earlier learner-risk prediction.
     """
 
     filtered = {
@@ -112,27 +173,32 @@ def filter_to_cutoff_day(
     }
 
     # -----------------------------------------------------
-    # VLE activity
+    # VLE interactions
     #
-    # studentVle.date is relative to the presentation start.
-    # Keep only interactions occurring by the cut-off.
+    # studentVle.date represents the course-relative day.
+    #
+    # Keep activity occurring on or before Day 60.
+    # Negative dates are retained because they represent
+    # activity occurring before the formal course start and
+    # were therefore available before the prediction point.
     # -----------------------------------------------------
 
     if "date" in filtered["student_vle"].columns:
 
         filtered["student_vle"] = (
             filtered["student_vle"][
-                filtered["student_vle"]["date"]
-                <= cutoff_day
+                filtered["student_vle"][
+                    "date"
+                ] <= cutoff_day
             ]
             .copy()
         )
 
     # -----------------------------------------------------
-    # Assessment submissions
+    # Student assessment submissions
     #
-    # Keep submissions actually made by the learner
-    # on or before the cut-off.
+    # Keep only submissions actually made on or before
+    # the observation point.
     # -----------------------------------------------------
 
     if (
@@ -142,9 +208,9 @@ def filter_to_cutoff_day(
 
         filtered["student_assessment"] = (
             filtered["student_assessment"][
-                filtered["student_assessment"][
-                    "date_submitted"
-                ]
+                filtered[
+                    "student_assessment"
+                ]["date_submitted"]
                 <= cutoff_day
             ]
             .copy()
@@ -153,10 +219,11 @@ def filter_to_cutoff_day(
     # -----------------------------------------------------
     # Assessment definitions
     #
-    # Keep assessments whose scheduled date is on or before
-    # the cut-off.
+    # Keep assessments whose scheduled due date is on or
+    # before the observation point.
     #
-    # Missing dates are excluded from this temporal set.
+    # Assessments with missing dates are excluded from the
+    # Day-60 assessment set for now.
     # -----------------------------------------------------
 
     if "date" in filtered["assessments"].columns:
@@ -194,6 +261,7 @@ def print_table_shapes(
     print("=" * 70)
 
     for name, df in tables.items():
+
         print(
             f"{name:<25} "
             f"rows={df.shape[0]:>10,} "
@@ -205,33 +273,131 @@ def print_table_shapes(
 # Display learner outcome distribution
 # ---------------------------------------------------------
 
-def print_outcome_distribution(tables):
+def print_outcome_distribution(
+    tables,
+):
     """
     Print the final-result distribution.
 
-    final_result must only be used as the prediction target,
-    never as a Day-60 input feature.
+    final_result represents future outcome information.
+
+    It will later be transformed into the prediction target:
+
+        1 = Fail or Withdrawn
+        0 = Pass or Distinction
+
+    It must not be used as an input feature.
     """
 
-    student_info = tables["student_info"]
+    student_info = tables[
+        "student_info"
+    ]
 
-    if "final_result" not in student_info.columns:
-        print("\nNo final_result column found.")
+    if (
+        "final_result"
+        not in student_info.columns
+    ):
+
+        print(
+            "\nNo final_result column found."
+        )
+
         return
 
-    print("\nFinal result distribution")
+    print(
+        "\nFinal result distribution"
+    )
+
     print("-" * 50)
 
     distribution = (
-        student_info["final_result"]
-        .value_counts(dropna=False)
+        student_info[
+            "final_result"
+        ]
+        .value_counts(
+            dropna=False
+        )
     )
 
-    print(distribution)
+    print(
+        distribution
+    )
 
 
 # ---------------------------------------------------------
-# Print date diagnostics
+# Display binary target distribution
+# ---------------------------------------------------------
+
+def print_binary_target_distribution(
+    tables,
+):
+    """
+    Show the planned binary prediction target.
+
+    At risk:
+        Fail or Withdrawn
+
+    Successful:
+        Pass or Distinction
+    """
+
+    student_info = (
+        tables["student_info"]
+        .copy()
+    )
+
+    student_info[
+        "risk_target"
+    ] = (
+        student_info[
+            "final_result"
+        ]
+        .isin(
+            [
+                "Fail",
+                "Withdrawn",
+            ]
+        )
+        .astype(int)
+    )
+
+    print(
+        "\nPlanned binary target"
+    )
+
+    print("-" * 50)
+
+    counts = (
+        student_info[
+            "risk_target"
+        ]
+        .value_counts()
+        .sort_index()
+    )
+
+    successful = counts.get(
+        0,
+        0,
+    )
+
+    at_risk = counts.get(
+        1,
+        0,
+    )
+
+    print(
+        f"0 = Pass/Distinction: "
+        f"{successful:,}"
+    )
+
+    print(
+        f"1 = Fail/Withdrawn:   "
+        f"{at_risk:,}"
+    )
+
+
+# ---------------------------------------------------------
+# Temporal diagnostics
 # ---------------------------------------------------------
 
 def print_temporal_diagnostics(
@@ -240,27 +406,30 @@ def print_temporal_diagnostics(
     cutoff_day,
 ):
     """
-    Show how the temporal cut-off changed the two main
+    Show how the temporal filtering changed the main
     event-level datasets.
     """
 
-    print("\nTemporal filtering diagnostics")
+    print(
+        "\nTemporal filtering diagnostics"
+    )
+
     print("-" * 50)
 
+    # -----------------------------------------------------
+    # VLE counts
+    # -----------------------------------------------------
+
     before_vle = len(
-        scoped_tables["student_vle"]
+        scoped_tables[
+            "student_vle"
+        ]
     )
 
     after_vle = len(
-        cutoff_tables["student_vle"]
-    )
-
-    before_assessments = len(
-        scoped_tables["student_assessment"]
-    )
-
-    after_assessments = len(
-        cutoff_tables["student_assessment"]
+        cutoff_tables[
+            "student_vle"
+        ]
     )
 
     print(
@@ -269,57 +438,178 @@ def print_temporal_diagnostics(
     )
 
     print(
-        f"VLE records by Day {cutoff_day}: "
+        f"VLE records by Day "
+        f"{cutoff_day}: "
         f"{after_vle:,}"
     )
 
+    # -----------------------------------------------------
+    # Assessment submission counts
+    # -----------------------------------------------------
+
+    before_assessment = len(
+        scoped_tables[
+            "student_assessment"
+        ]
+    )
+
+    after_assessment = len(
+        cutoff_tables[
+            "student_assessment"
+        ]
+    )
+
+    print()
+
     print(
-        f"\nAssessment submissions before cut-off: "
-        f"{before_assessments:,}"
+        f"Assessment submissions "
+        f"before cut-off: "
+        f"{before_assessment:,}"
     )
 
     print(
-        f"Assessment submissions by Day {cutoff_day}: "
-        f"{after_assessments:,}"
+        f"Assessment submissions "
+        f"by Day {cutoff_day}: "
+        f"{after_assessment:,}"
     )
+
+    # -----------------------------------------------------
+    # VLE date range
+    # -----------------------------------------------------
 
     if after_vle > 0:
 
         min_vle_date = (
-            cutoff_tables["student_vle"]["date"]
+            cutoff_tables[
+                "student_vle"
+            ]["date"]
             .min()
         )
 
         max_vle_date = (
-            cutoff_tables["student_vle"]["date"]
+            cutoff_tables[
+                "student_vle"
+            ]["date"]
             .max()
         )
 
+        print()
+
         print(
-            f"\nObserved VLE date range: "
-            f"{min_vle_date} to {max_vle_date}"
+            f"Observed VLE date range: "
+            f"{min_vle_date} "
+            f"to {max_vle_date}"
         )
 
-    if after_assessments > 0:
+    # -----------------------------------------------------
+    # Assessment submission range
+    # -----------------------------------------------------
+
+    if after_assessment > 0:
 
         min_submission_date = (
             cutoff_tables[
                 "student_assessment"
-            ]["date_submitted"]
+            ][
+                "date_submitted"
+            ]
             .min()
         )
 
         max_submission_date = (
             cutoff_tables[
                 "student_assessment"
-            ]["date_submitted"]
+            ][
+                "date_submitted"
+            ]
             .max()
         )
 
         print(
-            f"Observed assessment submission range: "
+            f"Observed assessment "
+            f"submission range: "
             f"{min_submission_date} "
             f"to {max_submission_date}"
+        )
+
+
+# ---------------------------------------------------------
+# Assessment scoping diagnostics
+# ---------------------------------------------------------
+
+def print_assessment_diagnostics(
+    scoped_tables,
+):
+    """
+    Confirm that studentAssessment has been correctly
+    restricted to assessments belonging to the selected
+    module presentation.
+    """
+
+    assessments = (
+        scoped_tables[
+            "assessments"
+        ]
+    )
+
+    student_assessment = (
+        scoped_tables[
+            "student_assessment"
+        ]
+    )
+
+    valid_assessment_ids = set(
+        assessments[
+            "id_assessment"
+        ]
+        .unique()
+    )
+
+    submission_assessment_ids = set(
+        student_assessment[
+            "id_assessment"
+        ]
+        .unique()
+    )
+
+    print(
+        "\nAssessment scoping diagnostics"
+    )
+
+    print("-" * 50)
+
+    print(
+        f"Assessments in selected "
+        f"presentation: "
+        f"{len(valid_assessment_ids)}"
+    )
+
+    print(
+        f"Assessment IDs appearing "
+        f"in student submissions: "
+        f"{len(submission_assessment_ids)}"
+    )
+
+    invalid_ids = (
+        submission_assessment_ids
+        - valid_assessment_ids
+    )
+
+    if not invalid_ids:
+
+        print(
+            "Assessment scoping check: PASS"
+        )
+
+    else:
+
+        print(
+            "Assessment scoping check: FAIL"
+        )
+
+        print(
+            f"Unexpected assessment IDs: "
+            f"{sorted(invalid_ids)}"
         )
 
 
@@ -334,7 +624,9 @@ if __name__ == "__main__":
     # -----------------------------------------------------
 
     CODE_MODULE = "BBB"
+
     CODE_PRESENTATION = "2014J"
+
     CUTOFF_DAY = 60
 
     # -----------------------------------------------------
@@ -349,48 +641,60 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 3. Scope the experiment
+    # 3. Scope to one module presentation
     # -----------------------------------------------------
 
-    scoped = filter_module_presentation(
-        data,
-        code_module=CODE_MODULE,
-        code_presentation=CODE_PRESENTATION,
+    scoped = (
+        filter_module_presentation(
+            data,
+            code_module=CODE_MODULE,
+            code_presentation=(
+                CODE_PRESENTATION
+            ),
+        )
     )
 
     print_table_shapes(
         scoped,
         (
-            f"SCOPED EXPERIMENT: "
+            "SCOPED EXPERIMENT: "
             f"{CODE_MODULE} "
             f"{CODE_PRESENTATION}"
         ),
     )
 
     # -----------------------------------------------------
-    # 4. Establish Day-60 temporal boundary
+    # 4. Verify assessment scoping
     # -----------------------------------------------------
 
-    cutoff_data = filter_to_cutoff_day(
-        scoped,
-        cutoff_day=CUTOFF_DAY,
+    print_assessment_diagnostics(
+        scoped
+    )
+
+    # -----------------------------------------------------
+    # 5. Apply temporal boundary
+    # -----------------------------------------------------
+
+    cutoff_data = (
+        filter_to_cutoff_day(
+            scoped,
+            cutoff_day=CUTOFF_DAY,
+        )
     )
 
     print_table_shapes(
         cutoff_data,
         (
-            f"INFORMATION AVAILABLE "
+            "INFORMATION AVAILABLE "
             f"BY DAY {CUTOFF_DAY}"
         ),
     )
 
     # -----------------------------------------------------
-    # 5. Show target distribution
+    # 6. Show final learner outcomes
     #
-    # Important:
-    # final_result is future outcome information.
-    # It is retained for constructing the model target,
-    # not as an input feature.
+    # These are retained only to construct the prediction
+    # target later.
     # -----------------------------------------------------
 
     print_outcome_distribution(
@@ -398,17 +702,30 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 6. Count learners
+    # 7. Show binary target
+    # -----------------------------------------------------
+
+    print_binary_target_distribution(
+        scoped
+    )
+
+    # -----------------------------------------------------
+    # 8. Count learners
     # -----------------------------------------------------
 
     number_of_students = (
-        scoped["student_info"][
+        scoped[
+            "student_info"
+        ][
             "id_student"
         ]
         .nunique()
     )
 
-    print("\nLearners in experiment")
+    print(
+        "\nLearners in experiment"
+    )
+
     print("-" * 50)
 
     print(
@@ -417,7 +734,7 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 7. Temporal diagnostics
+    # 9. Temporal diagnostics
     # -----------------------------------------------------
 
     print_temporal_diagnostics(
@@ -427,23 +744,29 @@ if __name__ == "__main__":
     )
 
     # -----------------------------------------------------
-    # 8. Confirmation
+    # 10. Final confirmation
     # -----------------------------------------------------
 
-    print("\n" + "=" * 70)
+    print(
+        "\n"
+        + "=" * 70
+    )
 
     print(
         "Experiment preparation complete."
     )
 
     print(
-        f"Prediction point: Day {CUTOFF_DAY}"
+        f"Prediction point: "
+        f"Day {CUTOFF_DAY}"
     )
 
     print(
-        f"Module presentation: "
+        "Module presentation: "
         f"{CODE_MODULE} "
         f"{CODE_PRESENTATION}"
     )
 
-    print("=" * 70)
+    print(
+        "=" * 70
+    )
